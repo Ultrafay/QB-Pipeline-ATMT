@@ -1,0 +1,125 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice OCR Web App</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f4f4f9; }
+        h1 { color: #333; text-align: center; }
+        .container { display: flex; gap: 20px; }
+        .upload-section { flex: 1; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .results-section { flex: 2; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .section-title { font-size: 1.2em; border-bottom: 2px solid #ddd; padding-bottom: 10px; margin-bottom: 20px; color: #555; }
+        .form-group { margin-bottom: 15px; }
+        button { background-color: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background-color: #45a049; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #loading { display: none; color: #666; margin-top: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .key-value-grid { display: grid; grid-template-columns: auto 1fr; gap: 10px; margin-bottom: 20px; }
+        .key { font-weight: bold; color: #555; }
+        .value { color: #000; }
+        .error { color: red; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Invoice OCR Extraction</h1>
+    
+    <div class="container">
+        <div class="upload-section">
+            <div class="section-title">Upload Invoice</div>
+            <div class="form-group">
+                <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png">
+            </div>
+            <button onclick="uploadFile()" id="uploadBtn">Extract Data</button>
+            <div id="loading">Processing... Please wait...</div>
+            <div id="errorMsg" class="error"></div>
+        </div>
+        
+        <div class="results-section">
+            <div class="section-title">Extraction Results</div>
+            <div id="resultsContent">
+                <p>Upload a file to see results here.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            if (!file) {
+                alert("Please select a file first.");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('uploadBtn').disabled = true;
+            document.getElementById('resultsContent').innerHTML = '';
+            document.getElementById('errorMsg').innerText = '';
+
+            try {
+                const response = await fetch('/api/extract', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server Error: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                displayResults(data);
+
+            } catch (error) {
+                console.error(error);
+                document.getElementById('errorMsg').innerText = error.message;
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('uploadBtn').disabled = false;
+            }
+        }
+
+        function displayResults(data) {
+            let html = '';
+
+            // Helper to display key-value pairs
+            const renderSection = (title, items) => {
+                let sectionHtml = `<h3>${title}</h3><div class="key-value-grid">`;
+                items.forEach(item => {
+                    // item is [key, value]
+                    sectionHtml += `<div class="key">${item[0]}:</div><div class="value">${item[1]}</div>`;
+                });
+                sectionHtml += `</div>`;
+                return sectionHtml;
+            };
+
+            if (data.seller && data.seller.length) html += renderSection("Seller Details", data.seller);
+            if (data.buyer && data.buyer.length) html += renderSection("Buyer Details", data.buyer);
+            if (data.invoice && data.invoice.length) html += renderSection("Invoice Details", data.invoice);
+
+            // Table
+            if (data.table && data.table.length) {
+                html += `<h3>Transactions Table</h3><table>`;
+                data.table.forEach((row, rowIndex) => {
+                    html += `<tr>`;
+                    row.forEach(cell => {
+                        html += rowIndex === 0 ? `<th>${cell}</th>` : `<td>${cell}</td>`; // Assuming first row is header? Maybe not.
+                    });
+                    html += `</tr>`;
+                });
+                html += `</table>`;
+            }
+
+            document.getElementById('resultsContent').innerHTML = html;
+        }
+    </script>
+</body>
+</html>

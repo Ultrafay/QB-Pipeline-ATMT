@@ -13,11 +13,13 @@ class LineItem(BaseModel):
     quantity: Optional[float] = None
     unit_price: Optional[float] = None
     amount: Optional[float] = None
+    tax_percentage: Optional[float] = None  # 0, 5, or null
 
 class InvoiceData(BaseModel):
     date: Optional[str] = None
     supplier_name: Optional[str] = None
     supplier_trn: Optional[str] = None
+    supplier_address: Optional[str] = None
     invoice_number: Optional[str] = None
     description: Optional[str] = None
     due_date: Optional[str] = None
@@ -59,19 +61,22 @@ CRITICAL INSTRUCTIONS:
 3. All amounts must be numeric only (no currency symbols, no commas)
 4. Dates must be in YYYY-MM-DD format
 5. If a field is not visible or unclear, use null
-6. TRN (Tax Registration Number) in UAE is 15 digits
+6. TRN (Tax Registration Number) in UAE is 15 digits starting with "100"
 7. Extract the exact currency code (e.g., AED, USD, EUR). Default to USD if none is detected.
+8. Extract the supplier's full address as a single string.
+9. For EACH line item, extract the VAT/tax percentage applied (0, 5, or null if not shown).
 
 IDENTIFY CORRECTLY:
 - SUPPLIER = The company SENDING the invoice
 - BILL TO = The company RECEIVING the invoice
 
-EXTRACT INTO THIS EXACT JSON STRUCTURE WITH THESE EXACT 12 FIELDS (plus line items, currency, etc.):
+EXTRACT INTO THIS EXACT JSON STRUCTURE:
 
 {
   "date": "YYYY-MM-DD",
   "supplier_name": "Company issuing the invoice",
-  "supplier_trn": "15-digit TRN",
+  "supplier_trn": "15-digit TRN or null",
+  "supplier_address": "Full supplier address as a single string, or null",
   "invoice_number": "Invoice reference number",
   "description": "General description of invoice (optional)",
   "due_date": "YYYY-MM-DD or null",
@@ -87,13 +92,15 @@ EXTRACT INTO THIS EXACT JSON STRUCTURE WITH THESE EXACT 12 FIELDS (plus line ite
       "description": "Exact item name from invoice",
       "quantity": 1.0,
       "unit_price": 0.00,
-      "amount": 0.00
+      "amount": 0.00,
+      "tax_percentage": 5
     },
     {
-      "description": "Next item...",
-      "quantity": 5.0,
+      "description": "Zero-rated item",
+      "quantity": 1.0,
       "unit_price": 10.00,
-      "amount": 50.00
+      "amount": 10.00,
+      "tax_percentage": 0
     }
   ],
   "extraction_confidence": "high|medium|low",
@@ -103,7 +110,8 @@ EXTRACT INTO THIS EXACT JSON STRUCTURE WITH THESE EXACT 12 FIELDS (plus line ite
 IMPORTANT:
 - If an item is free/bonus (FOC), set unit_price to 0 and amount to 0.
 - Capture the EXACT item description for each line.
-- The 'amount' in line_items should be the line total (Quantity * Unit Price).
+- The 'amount' in line_items should be the line total (Quantity * Unit Price) BEFORE tax.
+- tax_percentage per line: use 5 for 5% VAT, 0 for zero-rated/exempt, null if not visible.
 - Ensure 'total_amount' matches the sum of line items + VAT.
 
 Return ONLY valid JSON. No markdown."""

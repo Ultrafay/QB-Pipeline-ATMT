@@ -1,0 +1,14 @@
+.env
+.venv/
+credentials/
+__pycache__/
+*.pyc
+uploads/
+Details/
+*.log
+*.txt
+!requirements.txt
+readme_images/
+.git/
+.vscode/
+.gemini/

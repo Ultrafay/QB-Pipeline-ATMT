@@ -1,0 +1,27 @@
+# Environment & Credentials
+.env
+credentials/
+*.json
+!railway.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data
+uploads/
+Details/
+*.log
+
+# IDE
+.vscode/
+.idea/
+.gemini/
+
+# Debug/test scripts
+debug_*.py
+test_*.py
+verify_*.py
+reproduce_*.py
