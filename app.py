@@ -1,7 +1,7 @@
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from contextlib import asynccontextmanager
 import uvicorn
 import shutil
@@ -78,6 +78,68 @@ async def read_index():
 async def health_check():
     """Health check endpoint for Railway deployment"""
     return JSONResponse(status_code=200, content={"status": "ok"})
+
+@app.get("/launch", response_class=HTMLResponse)
+async def launch_page():
+    """Landing page shown after QBO authentication"""
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Launch - ATH by Solvevia</title>
+        <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .card { background: white; padding: 2.5rem; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); text-align: center; max-width: 450px; width: 100%; }
+            h1 { color: #111827; margin-bottom: 0.5rem; font-size: 1.8rem; }
+            p { color: #6b7280; margin-bottom: 2rem; }
+            .status { padding: 1.25rem; border-radius: 8px; margin-bottom: 2rem; background: #f9fafb; transition: all 0.3s ease; }
+            .status.connected { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+            .status.disconnected { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+            .btn { display: inline-block; background-color: #2563eb; color: white; padding: 0.75rem 2rem; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 1.1rem; transition: background-color 0.2s, transform 0.1s; border: none; cursor: pointer; }
+            .btn:hover { background-color: #1d4ed8; }
+            .btn:active { transform: scale(0.98); }
+            .loader { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(0,0,0,0.1); border-radius: 50%; border-top-color: #3b82f6; animation: spin 1s ease-in-out infinite; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Welcome to ATH</h1>
+            <p>Powered by Solvevia</p>
+            
+            <div id="qbo-status" class="status">
+                <div class="loader"></div>
+                <div style="margin-top: 0.5rem">Checking QuickBooks connection...</div>
+            </div>
+            
+            <a href="/static/index.html" class="btn">Go to Dashboard</a>
+        </div>
+
+        <script>
+            fetch('/api/qbo/status')
+                .then(response => response.json())
+                .then(data => {
+                    const statusDiv = document.getElementById('qbo-status');
+                    if (data.connected) {
+                        statusDiv.className = 'status connected';
+                        statusDiv.innerHTML = `✅ <strong>Connected to QuickBooks</strong><br><span style="display:inline-block; margin-top:0.5rem; color:#047857;">${data.company || ''}</span>`;
+                    } else {
+                        statusDiv.className = 'status disconnected';
+                        statusDiv.innerHTML = '❌ <strong>Not connected to QuickBooks</strong><br><span style="display:inline-block; margin-top:0.5rem; font-size:0.9em; color:#b91c1c;">Please connect from the Dashboard settings.</span>';
+                    }
+                })
+                .catch(error => {
+                    const statusDiv = document.getElementById('qbo-status');
+                    statusDiv.className = 'status disconnected';
+                    statusDiv.innerHTML = '⚠️ <strong>Error checking status</strong>';
+                });
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 @app.post("/api/extract")
 async def extract_invoice(file: UploadFile = File(...)):
@@ -269,7 +331,7 @@ async def qbo_callback(request: Request):
                 set_key(env_path, "QBO_REFRESH_TOKEN", refresh_token)
                 set_key(env_path, "QBO_REALM_ID",      realm_id)
 
-        return RedirectResponse(url="/static/auth_success.html")
+        return RedirectResponse(url="/launch")
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Token exchange failed: {str(e)}"})
