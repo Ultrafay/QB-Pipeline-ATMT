@@ -231,6 +231,9 @@ async def qbo_connect():
     if not client_id:
         raise HTTPException(status_code=500, detail="QBO_CLIENT_ID not set in .env")
 
+    print(f"[QBO-OAuth] client_id = '{client_id}'")
+    print(f"[QBO-OAuth] redirect_uri = '{_QBO_REDIRECT}'")
+
     auth_url = (
         f"{_QBO_AUTH_BASE}"
         f"?client_id={client_id}"
@@ -239,6 +242,7 @@ async def qbo_connect():
         f"&scope={_QBO_SCOPES}"
         f"&state=qbo_oauth"
     )
+    print(f"[QBO-OAuth] Full auth URL = {auth_url}")
     return RedirectResponse(url=auth_url)
 
 
