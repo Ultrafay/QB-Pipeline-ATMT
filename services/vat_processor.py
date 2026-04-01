@@ -13,91 +13,124 @@ _UAE_KEYWORDS = [
 ]
 
 # QBO tax rate code names
-TAX_RATE_5_PCT = "5.0% R"      # Recoverable UAE VAT
-TAX_RATE_ZERO  = "0.0% Z"      # Zero-rated / foreign
+TAX_RATE_UAE_SR = "SR Standard Rated"
+TAX_RATE_UAE_ZR = "ZR Zero Rated"
+TAX_RATE_EXEMPT = "EX Exempt"
+TAX_RATE_GCC_IG = "IG Intra GCC"
+TAX_RATE_FOREIGN_RC = "RC Reverse Charge"
+TAX_RATE_NON    = "NON"
+
+# Locational keywords
+_UAE_KEYWORDS = [
+    "uae", "united arab emirates",
+    "dubai", "abu dhabi", "sharjah", "ajman",
+    "fujairah", "ras al khaimah", "umm al quwain",
+]
+_GCC_KEYWORDS = [
+    "saudi arabia", "ksa",
+    "oman",
+    "bahrain",
+    "kuwait",
+    "qatar"
+]
 
 
 def _is_uae_trn(trn: str) -> bool:
-    """Return True if the TRN looks like a valid UAE TRN (15 digits starting with 100)."""
     if not trn:
         return False
     digits = re.sub(r"\D", "", str(trn))
     return len(digits) == 15 and digits.startswith("100")
 
 
-def _is_uae_address(address: str) -> bool:
-    """Return True if the address contains a UAE emirate or country keyword."""
-    if not address:
-        return False
-    lower = address.lower()
-    return any(kw in lower for kw in _UAE_KEYWORDS)
-
-
-def is_uae_invoice(invoice_data: dict) -> bool:
+def get_location_category(invoice_data: dict) -> str:
     """
-    Determine if an invoice is from a UAE-based vendor.
-    Checks supplier TRN and supplier address.
+    Returns 'UAE', 'GCC', or 'Foreign' based on address heuristics.
     """
     trn = str(invoice_data.get("supplier_trn", "") or "").strip()
-    address = str(invoice_data.get("supplier_address", "") or "").strip()
-    return _is_uae_trn(trn) or _is_uae_address(address)
+    address = str(invoice_data.get("supplier_address", "") or "").strip().lower()
+    
+    if _is_uae_trn(trn):
+        return "UAE"
+        
+    for kw in _UAE_KEYWORDS:
+        if kw in address:
+            return "UAE"
+            
+    for kw in _GCC_KEYWORDS:
+        if kw in address:
+            return "GCC"
+            
+    return "Foreign"
 
 
 def process_vat(invoice_data: dict) -> dict:
     """
     Adjust invoice line items and add VAT metadata for QBO bill posting.
 
-    UAE invoices:
-      - Keep line amounts as pre-tax
-      - Tag each line with '5.0% R' or '0.0% Z' based on per-line tax_percentage
-      - Set GlobalTaxCalculation = TaxExcluded so QBO computes tax
-
-    Foreign invoices:
-      - Distribute total VAT equally across line items (absorbed into expense)
-      - Tag all lines with '0.0% Z'
-      - Zero out vat_amount so QBO doesn't track it separately
+    - UAE: SR Standard Rated (5%), ZR Zero Rated (0%), EX Exempt (Exempt or manual fallback NON)
+    - GCC: IG Intra GCC
+    - Foreign: RC Reverse Charge + RCM Journal Entry logic (handled downstream)
     """
-    uae = is_uae_invoice(invoice_data)
+    category = get_location_category(invoice_data)
     vat_amount = float(invoice_data.get("vat_amount", 0.0) or 0.0)
     line_items: List[dict] = invoice_data.get("line_items", []) or []
 
-    print(f"[VAT] {'UAE' if uae else 'Foreign'} invoice — VAT: {vat_amount}, Lines: {len(line_items)}")
+    print(f"[VAT] Supplier Location: {category} — VAT: {vat_amount}, Lines: {len(line_items)}")
+    
+    invoice_data["supplier_location_category"] = category
+    # Track non-standard cases requiring manual review
+    non_standard_flag = False
 
-    if uae:
-        # ── UAE: keep pre-tax amounts, assign per-line tax codes ──
+    if category == "UAE":
+        # UAE: apply standard SR, ZR or NON
         for item in line_items:
             tax_pct = item.get("tax_percentage")
-            if tax_pct is not None and float(tax_pct) > 0:
-                item["qbo_tax_code"] = TAX_RATE_5_PCT
-            elif tax_pct is not None and float(tax_pct) == 0:
-                item["qbo_tax_code"] = TAX_RATE_ZERO
+            if tax_pct is not None and float(tax_pct) == 5.0:
+                item["qbo_tax_code"] = TAX_RATE_UAE_SR
+            elif tax_pct is not None and float(tax_pct) == 0.0:
+                item["qbo_tax_code"] = TAX_RATE_UAE_ZR
+            elif tax_pct is None:
+                item["qbo_tax_code"] = TAX_RATE_UAE_SR if vat_amount > 0 else TAX_RATE_UAE_ZR
             else:
-                # tax_percentage is null — infer from invoice-level vat_amount
-                item["qbo_tax_code"] = TAX_RATE_5_PCT if vat_amount > 0 else TAX_RATE_ZERO
+                item["qbo_tax_code"] = TAX_RATE_NON
+                non_standard_flag = True
 
-        invoice_data["line_items"] = line_items
-        invoice_data["is_uae_invoice"] = True
         invoice_data["apply_global_tax"] = True
-        # vat_amount stays as-is for TxnTaxDetail.TotalTax
+        
+    elif category == "GCC":
+        # GCC invoices use a single intra GCC reporting code
+        for item in line_items:
+            item["qbo_tax_code"] = TAX_RATE_GCC_IG
+            
+        invoice_data["apply_global_tax"] = False
+        invoice_data["vat_amount"] = 0.0  # Zero out since code rules handle it internally
 
     else:
-        # ── Foreign: absorb VAT into line amounts ──
-        valid_lines = [li for li in line_items if float(li.get("amount", 0) or 0) > 0]
-        num_lines = len(valid_lines) or 1
-        vat_per_line = round(vat_amount / num_lines, 2) if vat_amount > 0 else 0.0
-
-        if vat_amount > 0:
-            print(f"[VAT] Distributing {vat_amount} across {num_lines} lines ({vat_per_line}/line)")
-
+        # Foreign invoices use RC Reverse Charge
         for item in line_items:
-            item_amount = float(item.get("amount", 0) or 0)
-            if item_amount > 0 and vat_per_line > 0:
-                item["amount"] = round(item_amount + vat_per_line, 2)
-            item["qbo_tax_code"] = TAX_RATE_ZERO
-
-        invoice_data["line_items"] = line_items
-        invoice_data["is_uae_invoice"] = False
+            tax_pct = item.get("tax_percentage")
+            if tax_pct is not None and float(tax_pct) == 5.0:
+                item["qbo_tax_code"] = TAX_RATE_FOREIGN_RC
+            else:
+                item["qbo_tax_code"] = TAX_RATE_FOREIGN_RC
+                
+            # If the parser identified actual VAT, note it but don't charge it globally
+            if vat_amount > 0 and tax_pct is not None and float(tax_pct) not in (0.0, 5.0):
+                non_standard_flag = True
+                
+        # Zero out the API tax totals because QBO will compute reverse charge itself
         invoice_data["apply_global_tax"] = False
-        invoice_data["vat_amount"] = 0.0  # VAT absorbed — don't track separately
+        invoice_data["vat_amount"] = 0.0
+        
+    if non_standard_flag:
+        msg = f"MANUAL REVIEW REQUIRED: Non-standard {category} VAT rate detected."
+        existing = invoice_data.get("manual_review_memo", "")
+        invoice_data["manual_review_memo"] = f"{existing} | {msg}" if existing else msg
+        print(f"[VAT] {msg}")
+
+    # For backward compatibility downstream in legacy modules
+    invoice_data["line_items"] = line_items
+    invoice_data["is_uae_invoice"] = (category == "UAE")
 
     return invoice_data
+

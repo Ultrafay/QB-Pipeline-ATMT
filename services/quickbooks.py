@@ -369,6 +369,53 @@ class QuickBooksService:
         self.gl_cache[name_clean] = fallback
         return fallback
 
+    def _get_account_by_name(self, account_name: str, query_condition: str = "") -> Optional[dict]:
+        """
+        Generic fuzzy search for any account.
+        Returns QBO AccountRef dict or None if not found.
+        """
+        if not account_name or not account_name.strip():
+            return None
+            
+        name_clean = account_name.lower().strip()
+        cache_key = f"{name_clean}_{query_condition}"
+        if cache_key in self.gl_cache:
+            return self.gl_cache[cache_key]
+
+        try:
+            query = f"SELECT * FROM Account {query_condition} MAXRESULTS 100"
+            resp = self._request("GET", "query", params={"query": query})
+            
+            if resp.status_code == 200:
+                accounts = resp.json().get("QueryResponse", {}).get("Account", [])
+                
+                best_account = None
+                best_score = 0
+                
+                for acc in accounts:
+                    display_name = acc.get("Name", "")
+                    score = fuzz.ratio(name_clean, display_name.lower().strip())
+                    partial_score = fuzz.partial_ratio(name_clean, display_name.lower().strip())
+                    top_score = max(score, partial_score)
+                    
+                    if top_score > best_score:
+                        best_score = top_score
+                        best_account = acc
+                
+                if best_score >= FUZZY_MATCH_THRESHOLD and best_account:
+                    matched_ref = {
+                        "value": str(best_account.get("Id")),
+                        "name": str(best_account.get("Name"))
+                    }
+                    self.gl_cache[cache_key] = matched_ref
+                    return matched_ref
+                    
+            print(f"[QBO] Could not find account matching '{account_name}' with condition '{query_condition}'.")
+        except Exception as e:
+            print(f"[QBO] _get_account_by_name error: {e}")
+            
+        return None
+
     # ── Vendor Management ────────────────────────────────────────────────────
 
     def _validate_vendor(self, vendor_id: str) -> Optional[Dict]:
@@ -536,6 +583,98 @@ class QuickBooksService:
             print(f"[QBO] check_duplicate_bill error: {e}")
             return False
 
+    # ── Exchange Rates & Journal Entries ─────────────────────────────────────
+
+    def get_exchange_rate(self, currency_code: str, as_of_date: str) -> float:
+        """
+        Fetch the exchange rate for the given currency on a specific date.
+        Falls back to 3.6725 for USD if the API fails.
+        """
+        if currency_code == "AED":
+            return 1.0
+            
+        try:
+            query = f"sourcecurrencycode={currency_code}&asofdate={as_of_date}"
+            resp = self._request("GET", f"exchangerate?{query}")
+            
+            if resp.status_code == 200:
+                rate = resp.json().get("ExchangeRate", {}).get("Rate")
+                if rate:
+                    print(f"[QBO] Fetched Exchange Rate: 1 {currency_code} = {rate} AED as of {as_of_date}")
+                    return float(rate)
+            else:
+                print(f"[QBO] Warning: Failed to fetch exchange rate ({resp.status_code}): {resp.text[:200]}")
+        except Exception as e:
+            print(f"[QBO] get_exchange_rate error: {e}")
+            
+        # Fallback for USD
+        if currency_code == "USD":
+            print(f"[QBO] Using hardcoded fallback exchange rate for USD: 3.6725")
+            return 3.6725
+            
+        print(f"[QBO] Warning: No fallback rate for {currency_code}. Defaulting to 1.0.")
+        return 1.0
+
+    def create_rcm_journal_entry(self, bill_id: str, amount_aed: float, txn_date: str) -> bool:
+        """
+        Create a Journal Entry for Reverse Charge Mechanism (5% of total AED amount).
+        Debits "Input VAT - RCM" and Credits "Output VAT - RCM".
+        """
+        rcm_amount = round(amount_aed * 0.05, 2)
+        if rcm_amount <= 0:
+            return False
+            
+        print(f"[QBO] Creating RCM Journal Entry for Bill {bill_id} — VAT Amount: {rcm_amount} AED")
+        
+        # We search broadly since we don't know the exact AccountType they chose
+        input_vat = self._get_account_by_name("Input VAT - RCM")
+        output_vat = self._get_account_by_name("Output VAT - RCM")
+        
+        if not input_vat or not output_vat:
+            print("[QBO] Warning: Could not find 'Input VAT - RCM' or 'Output VAT - RCM' accounts. RCM Journal Entry aborted.")
+            return False
+            
+        payload = {
+            "TxnDate": txn_date,
+            "PrivateNote": f"RCM Auto-Entry for Bill ID: {bill_id}",
+            "CurrencyRef": {"value": "AED"},
+            "Line": [
+                {
+                    "Id": "0",
+                    "Description": f"Input VAT for Reverse Charge on Bill {bill_id}",
+                    "Amount": rcm_amount,
+                    "DetailType": "JournalEntryLineDetail",
+                    "JournalEntryLineDetail": {
+                        "PostingType": "Debit",
+                        "AccountRef": input_vat
+                    }
+                },
+                {
+                    "Id": "1",
+                    "Description": f"Output VAT for Reverse Charge on Bill {bill_id}",
+                    "Amount": rcm_amount,
+                    "DetailType": "JournalEntryLineDetail",
+                    "JournalEntryLineDetail": {
+                        "PostingType": "Credit",
+                        "AccountRef": output_vat
+                    }
+                }
+            ]
+        }
+        
+        try:
+            resp = self._request("POST", "journalentry", json=payload)
+            if resp.status_code in (200, 201):
+                je = resp.json().get("JournalEntry", {})
+                print(f"[QBO] Success: RCM Journal Entry posted — ID: {je.get('Id')}")
+                return True
+            else:
+                print(f"[QBO] RCM Journal Entry failed: {resp.status_code} — {resp.text}")
+                return False
+        except Exception as e:
+            print(f"[QBO] create_rcm_journal_entry error: {e}")
+            return False
+
     # ── Bill Posting ─────────────────────────────────────────────────────────
 
     def post_bill(self, invoice_data: dict, vendor_id: str, vendor_currency: str = "USD") -> Tuple[str, str]:
@@ -618,7 +757,7 @@ class QuickBooksService:
                     "Description": "Invoice",
                 }]
 
-            # ── Currency ──────────────────────────────────────────
+            # ── Currency & Exchange Rate ────────────────────────────
             # Always use the vendor's currency (QBO requires bill currency
             # to match the vendor's currency).  Log a warning if they differ.
             invoice_currency = str(invoice_data.get("currency", "USD") or "USD").upper()
@@ -631,8 +770,14 @@ class QuickBooksService:
                     f"[QBO] Currency mismatch: invoice says '{invoice_currency}' "
                     f"but vendor is '{currency_code}'. Using vendor currency."
                 )
+                
+            exchange_rate = self.get_exchange_rate(currency_code, txn_date)
 
             # ── Build Payload ─────────────────────────────────────
+            memo_text = ""
+            if invoice_data.get("manual_review_memo"):
+                memo_text = f" | {invoice_data.get('manual_review_memo')}"
+
             payload = {
                 "VendorRef": {"value": vendor_id},
                 "Line":      qbo_lines,
@@ -642,8 +787,9 @@ class QuickBooksService:
                 "CurrencyRef": {
                     "value": currency_code
                 },
+                "ExchangeRate": exchange_rate,
                 "PrivateNote": (
-                    f"Auto-imported | "
+                    f"Auto-imported{memo_text} | "
                     f"File: {invoice_data.get('file_id', '')} | "
                     f"Supplier: {invoice_data.get('supplier_name', '')}"
                 )[:4000],
@@ -655,11 +801,6 @@ class QuickBooksService:
                 payload["TxnTaxDetail"] = {
                     "TotalTax": round(vat_amount, 2),
                 }
-            
-            # If not USD (which is likely the home currency), set ExchangeRate to 1.0 
-            # so the API doesn't complain about an unknown exchange rate.
-            if currency_code != "USD":
-                payload["ExchangeRate"] = 1.0
 
             print(f"[QBO] Sending Bill payload: {json.dumps(payload, indent=2)}")
 
@@ -669,6 +810,13 @@ class QuickBooksService:
                 bill    = resp.json().get("Bill", {})
                 bill_id = str(bill.get("Id", ""))
                 print(f"[QBO] Success: Bill posted — ID: {bill_id}")
+                
+                # Check if Foreign supplier to trigger RCM Journal Entry
+                location_cat = invoice_data.get("supplier_location_category", "Unknown")
+                if location_cat == "Foreign":
+                    amount_aed = total_amount * exchange_rate
+                    self.create_rcm_journal_entry(bill_id, amount_aed, txn_date)
+                    
                 return "posted", bill_id
             else:
                 print(f"[QBO] post_bill failed: {resp.status_code} — {resp.text}")
