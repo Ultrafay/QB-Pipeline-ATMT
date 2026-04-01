@@ -5,13 +5,6 @@ line items with the correct QBO tax rate code before bill posting.
 import re
 from typing import List
 
-# Emirates keywords for address matching (case-insensitive)
-_UAE_KEYWORDS = [
-    "uae", "united arab emirates",
-    "dubai", "abu dhabi", "sharjah", "ajman",
-    "fujairah", "ras al khaimah", "umm al quwain",
-]
-
 # QBO tax rate code names
 TAX_RATE_UAE_SR = "SR Standard Rated"
 TAX_RATE_UAE_ZR = "ZR Zero Rated"

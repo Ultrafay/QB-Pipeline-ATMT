@@ -122,6 +122,11 @@ def process_invoice(file_path: Path, file_id: str):
                             gl_classifier.log_pending_review(invoice_dict, "No match")
                     # ── End GL Classification ────────────────────────
 
+                    # ── VAT Processing (UAE vs Foreign vs GCC) ──────
+                    from services.vat_processor import process_vat
+                    invoice_dict = process_vat(invoice_dict)
+                    # ── End VAT Processing ─────────────────────────
+
                     print("Syncing to QuickBooks...")
                     qbo_status, qbo_bill_id = qbo.sync(invoice_dict, str(file_path))
                     if sheets:

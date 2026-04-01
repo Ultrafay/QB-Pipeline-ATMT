@@ -722,9 +722,10 @@ class QuickBooksService:
             vat_amount = float(invoice_data.get("vat_amount", 0.0) or 0.0)
             is_uae = invoice_data.get("is_uae_invoice", False)
             apply_global_tax = invoice_data.get("apply_global_tax", False)
+            location_cat = invoice_data.get("supplier_location_category", "Unknown")
 
             # Default tax code for lines without a specific qbo_tax_code
-            default_tax_name = "0.0% Z"
+            default_tax_name = "ZR Zero Rated"
 
             qbo_lines = []
             for i, item in enumerate(line_items, start=1):
@@ -735,6 +736,7 @@ class QuickBooksService:
                 # Per-line tax code from vat_processor, or default
                 line_tax_name = item.get("qbo_tax_code", default_tax_name)
                 line_tax_ref = self._resolve_tax_code_by_name(line_tax_name)
+                print(f"[QBO] Line {i}: tax_code='{line_tax_name}' → TaxCodeRef={line_tax_ref}")
 
                 qbo_lines.append({
                     "Id":         str(i),
@@ -747,6 +749,8 @@ class QuickBooksService:
                     },
                     "Description": str(item.get("description", "") or ""),
                 })
+
+            print(f"[QBO] Location: {location_cat} | UAE: {is_uae} | VAT: {vat_amount} | GlobalTax: {apply_global_tax}")
 
             # Safety: always have at least one line
             if not qbo_lines:
@@ -801,12 +805,16 @@ class QuickBooksService:
                 )[:4000],
             }
 
-            # ── Tax detail on the payload (UAE invoices only) ─────
-            if apply_global_tax and vat_amount > 0:
+            # ── Tax detail on the payload ─────────────────────
+            # Always set TaxExcluded when there's VAT so QBO applies tax on top of line amounts
+            if vat_amount > 0:
                 payload["GlobalTaxCalculation"] = "TaxExcluded"
-                payload["TxnTaxDetail"] = {
-                    "TotalTax": round(vat_amount, 2),
-                }
+                if apply_global_tax:
+                    payload["TxnTaxDetail"] = {
+                        "TotalTax": round(vat_amount, 2),
+                    }
+            else:
+                payload["GlobalTaxCalculation"] = "TaxExcluded"
 
             print(f"[QBO] Sending Bill payload: {json.dumps(payload, indent=2)}")
 
