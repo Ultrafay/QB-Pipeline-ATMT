@@ -287,6 +287,84 @@ class QuickBooksService:
         print(f"[QBO] Warning: Tax code '{name}' not found in QBO, falling back to NON")
         return {"value": "NON"}
 
+    # ── Location & Terms Mapping ─────────────────────────────────────────────
+
+    def _get_location_map(self) -> dict:
+        """Returns name -> {'value': id, 'type': 'DepartmentRef' or 'LocationRef'}"""
+        if getattr(self, '_loc_map', None) is not None:
+            return self._loc_map
+
+        self._loc_map = {}
+        try:
+            for entity, ref_type in [("Department", "DepartmentRef"), ("Location", "LocationRef")]:
+                resp = self._request("GET", "query", params={"query": f"SELECT * FROM {entity} WHERE Active = true MAXRESULTS 100"})
+                if resp.status_code == 200:
+                    items = resp.json().get("QueryResponse", {}).get(entity, [])
+                    for item in items:
+                        self._loc_map[item.get("Name", "")] = {"value": str(item.get("Id", "")), "type": ref_type}
+        except Exception as e:
+            print(f"[QBO] _get_location_map error: {e}")
+        return self._loc_map
+
+    def _resolve_location_by_name(self, name: str) -> Optional[dict]:
+        if not name:
+            return None
+        loc_map = self._get_location_map()
+        name_clean = name.lower().strip()
+        
+        best_match = None
+        best_score = 0
+        for loc_name, loc_data in loc_map.items():
+            score = fuzz.ratio(name_clean, loc_name.lower().strip())
+            partial_score = fuzz.partial_ratio(name_clean, loc_name.lower().strip())
+            top = max(score, partial_score)
+            if top > best_score:
+                best_score = top
+                best_match = loc_data
+                
+        if best_score >= FUZZY_MATCH_THRESHOLD and best_match:
+            print(f"[QBO] Mapped Location '{name}' to {best_match['type']} ID {best_match['value']} (score={best_score})")
+            return best_match
+        print(f"[QBO] No Location match for '{name}' (best score={best_score})")
+        return None
+
+    def _get_term_map(self) -> dict:
+        if getattr(self, '_term_map', None) is not None:
+            return self._term_map
+        
+        self._term_map = {}
+        try:
+            resp = self._request("GET", "query", params={"query": "SELECT * FROM Term WHERE Active = true MAXRESULTS 100"})
+            if resp.status_code == 200:
+                items = resp.json().get("QueryResponse", {}).get("Term", [])
+                for item in items:
+                    self._term_map[item.get("Name", "")] = {"value": str(item.get("Id", ""))}
+        except Exception as e:
+            print(f"[QBO] _get_term_map error: {e}")
+        return self._term_map
+
+    def _resolve_term_by_name(self, name: str) -> Optional[dict]:
+        if not name:
+            return None
+        term_map = self._get_term_map()
+        name_clean = name.lower().strip()
+        
+        best_match = None
+        best_score = 0
+        for term_name, term_data in term_map.items():
+            score = fuzz.ratio(name_clean, term_name.lower().strip())
+            partial_score = fuzz.partial_ratio(name_clean, term_name.lower().strip())
+            top = max(score, partial_score)
+            if top > best_score:
+                best_score = top
+                best_match = term_data
+                
+        if best_score >= FUZZY_MATCH_THRESHOLD and best_match:
+            print(f"[QBO] Mapped Term '{name}' to ID {best_match['value']} (score={best_score})")
+            return best_match
+        print(f"[QBO] No Term match for '{name}' (best score={best_score})")
+        return None
+
     # ── Accounts Management ──────────────────────────────────────────────────
 
     def _get_default_expense_account(self) -> dict:
@@ -788,6 +866,13 @@ class QuickBooksService:
             if invoice_data.get("manual_review_memo"):
                 memo_text = f" | {invoice_data.get('manual_review_memo')}"
 
+            # ── Resolve Terms and Locations ───────────────────────
+            credit_terms = str(invoice_data.get("credit_terms", "") or "").strip()
+            purchase_loc = str(invoice_data.get("purchase_location", "") or "").strip()
+            
+            term_ref = self._resolve_term_by_name(credit_terms)
+            loc_ref = self._resolve_location_by_name(purchase_loc)
+
             payload = {
                 "VendorRef": {"value": vendor_id},
                 "Line":      qbo_lines,
@@ -804,6 +889,15 @@ class QuickBooksService:
                     f"Supplier: {invoice_data.get('supplier_name', '')}"
                 )[:4000],
             }
+
+            if term_ref:
+                payload["SalesTermRef"] = term_ref
+            if loc_ref:
+                # Copy dict to avoid modifying cached dict
+                loc_ref_copy = loc_ref.copy()
+                ref_type = loc_ref_copy.pop("type", "LocationRef")
+                payload[ref_type] = loc_ref_copy
+
 
             # ── Tax detail on the payload ─────────────────────
             # Always set TaxExcluded when there's VAT so QBO applies tax on top of line amounts

@@ -26,6 +26,7 @@ class InvoiceData(BaseModel):
     credit_terms: Optional[str] = None
     bill_to: Optional[str] = None
     bill_to_trn: Optional[str] = None
+    purchase_location: Optional[str] = None
     gl_code_suggested: Optional[str] = None
     exclusive_amount: Optional[float] = None
     vat_amount: Optional[float] = None
@@ -77,6 +78,7 @@ EXTRACT INTO THIS EXACT JSON STRUCTURE:
   "supplier_name": "Company issuing the invoice",
   "supplier_trn": "15-digit TRN or null",
   "supplier_address": "Full supplier address as a single string, or null",
+  "purchase_location": "Name of the branch or location if mentioned (e.g., Dubai Marina, Head Office), or null",
   "invoice_number": "Invoice reference number",
   "description": "General description of invoice (optional)",
   "due_date": "YYYY-MM-DD or null",

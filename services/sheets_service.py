@@ -23,6 +23,7 @@ class GoogleSheetsService:
         "Line Amount",   # New
         "Due Date",
         "Credit Terms",
+        "Purchase Location",
         "Bill To",
         "GL Code (Suggested)",
         "Exclusive Amount",
@@ -115,6 +116,7 @@ class GoogleSheetsService:
                     item.get('amount', 0),                      # Line Amount
                     invoice_data.get('due_date', ''),           # Due Date
                     invoice_data.get('credit_terms', ''),       # Credit Terms
+                    invoice_data.get('purchase_location', ''),  # Purchase Location
                     invoice_data.get('bill_to', ''),            # Bill To
                     invoice_data.get('gl_code_suggested', ''),  # GL Code
                     invoice_data.get('exclusive_amount', 0.0),  # Exclusive Amount
