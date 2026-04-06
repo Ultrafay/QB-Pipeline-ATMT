@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 
 # Import New Services
 from services.openai_extractor import OpenAIExtractor, InvoiceData
-from services.gemini_extractor import GeminiExtractor
 from services.sheets_service import GoogleSheetsService
 from utils.credentials_helper import get_credentials_path
 
@@ -34,7 +33,6 @@ extractor = None
 sheets = None
 try:
     openai_key = os.getenv("OPENAI_API_KEY")
-    gemini_key = os.getenv("GEMINI_API_KEY")
 
     if openai_key:
         extractor = OpenAIExtractor(
@@ -42,10 +40,7 @@ try:
             org_id=os.getenv("OPENAI_ORG_ID"),
             project_id=os.getenv("OPENAI_PROJECT_ID")
         )
-        print("OpenAI Extractor initialized.")
-    elif gemini_key:
-        extractor = GeminiExtractor(api_key=gemini_key)
-        print("Gemini Extractor initialized.")
+        print("OpenAI Extractor (GPT-4o) initialized.")
     
     creds_path = get_credentials_path()
     sheets = GoogleSheetsService(
