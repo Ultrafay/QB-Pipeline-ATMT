@@ -778,14 +778,14 @@ class QuickBooksService:
         print(f"[QBO] Warning: No fallback rate for {currency_code}. Defaulting to 1.0.")
         return 1.0
 
-    def create_rcm_journal_entry(self, bill_id: str, amount_aed: float, txn_date: str) -> bool:
+    def create_rcm_journal_entry(self, bill_id: str, tax_amount_aed: float, txn_date: str) -> bool:
         """
-        Create a Journal Entry for Reverse Charge Mechanism (5% of total AED amount).
-        Debits "Input VAT - RCM" and Credits "Output VAT - RCM".
+        Create a Journal Entry for Reverse Charge Mechanism.
+        Debits "Input VAT - RCM" and Credits "Output VAT - RCM" using the exact provided tax amount.
         """
-        rcm_amount = round(amount_aed * 0.05, 2)
+        rcm_amount = round(tax_amount_aed, 2)
         if rcm_amount <= 0:
-            return False
+            print(f"[QBO] RCM calculated as 0 for Bill {bill_id} — still creating zero-value journal entry per spec.")
             
         print(f"[QBO] Creating RCM Journal Entry for Bill {bill_id} — VAT Amount: {rcm_amount} AED")
         
@@ -1003,8 +1003,8 @@ class QuickBooksService:
                 # RCM automatically).
                 location_cat = invoice_data.get("supplier_location_category", "Unknown")
                 if location_cat == "Foreign" and not invoice_data.get("tax_inclusive"):
-                    amount_aed = total_amount * exchange_rate
-                    self.create_rcm_journal_entry(bill_id, amount_aed, txn_date)
+                    rcm_aed = invoice_data.get("rcm_tax_amount", 0.0) * exchange_rate
+                    self.create_rcm_journal_entry(bill_id, rcm_aed, txn_date)
 
                 return "posted", bill_id
             else:

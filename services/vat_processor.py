@@ -117,58 +117,79 @@ def _fallback_code_for_location(category: str, tax_pct, has_invoice_vat: bool) -
 
 # ── Foreign tax distribution ──────────────────────────────────────────────
 
+def _determine_rcm_tax(invoice_data: dict, subtotal: float) -> tuple[float, float]:
+    """
+    Determine the actual RCM tax percentage and absolute amount.
+    Returns (percentage, amount)
+    """
+    tax_pct = invoice_data.get("invoice_tax_percentage")
+    tax_amt = float(invoice_data.get("invoice_tax_amount", 0.0) or 0.0)
+    
+    if tax_pct is not None and tax_pct != "":
+        tax_pct = float(tax_pct)
+        if tax_amt <= 0 and subtotal > 0:
+            tax_amt = round(subtotal * (tax_pct / 100.0), 2)
+        return tax_pct, tax_amt
+        
+    if tax_amt > 0 and subtotal > 0:
+        calculated_pct = round((tax_amt / subtotal) * 100.0, 2)
+        return calculated_pct, tax_amt
+        
+    return 0.0, 0.0
+
 def _distribute_foreign_tax(invoice_data: dict, line_items: List[dict]) -> List[dict]:
     """
-    For non-UAE invoices, distribute the foreign tax proportionally across
-    line items based on each line's share of the subtotal.
-
-    After distribution, each line's `amount` becomes the gross (tax-inclusive)
-    value.  The caller should set GlobalTaxCalculation = "TaxInclusive" on the
-    QBO bill.
+    For non-UAE invoices, distribute the foreign tax equally across line items.
+    
+    After distribution, each line's `amount` becomes the gross (tax-inclusive) value.
     """
-    invoice_tax = float(invoice_data.get("invoice_tax_amount", 0.0) or 0.0)
-    if invoice_tax <= 0:
-        return line_items
-
-    # Calculate subtotal (sum of pre-tax line amounts)
     subtotal = sum(float(item.get("amount", 0.0) or 0.0) for item in line_items)
-    if subtotal <= 0:
+    
+    rcm_pct, rcm_amt = _determine_rcm_tax(invoice_data, subtotal)
+    
+    # Store these back so QBO integration can use the exact amount for its journal entry
+    invoice_data["rcm_tax_percentage"] = rcm_pct
+    invoice_data["rcm_tax_amount"] = rcm_amt
+    
+    if rcm_amt <= 0:
         return line_items
 
-    print(f"[VAT] Distributing foreign tax {invoice_tax} across {len(line_items)} lines (subtotal={subtotal})")
+    valid_line_indices = [i for i, item in enumerate(line_items) if float(item.get("amount", 0.0) or 0.0) > 0]
+    num_valid = len(valid_line_indices)
+    
+    if num_valid == 0:
+        return line_items
+
+    print(f"[VAT] Distributing {rcm_amt} (implied {rcm_pct}%) equally across {num_valid} lines (subtotal={subtotal})")
 
     grossed_up = []
     distributed_total = 0.0
+    per_line_tax = round(rcm_amt / num_valid, 2)
+    
+    valid_count = 0
 
-    for item in line_items:
+    for i, item in enumerate(line_items):
         item_amount = float(item.get("amount", 0.0) or 0.0)
+        item = dict(item)  # shallow copy
+        
         if item_amount <= 0:
             grossed_up.append(item)
             continue
-
-        share = item_amount / subtotal
-        tax_portion = round(share * invoice_tax, 2)
+            
+        valid_count += 1
+        
+        if valid_count == num_valid:
+            # Last valid line — swallow any rounding remainder cents
+            tax_portion = round(rcm_amt - distributed_total, 2)
+        else:
+            tax_portion = per_line_tax
+            
         new_amount = round(item_amount + tax_portion, 2)
         distributed_total += tax_portion
 
-        item = dict(item)  # shallow copy to avoid mutating original
         item["amount"] = new_amount
         item["_pre_tax_amount"] = item_amount  # keep for debugging
         grossed_up.append(item)
-
-    # Fix rounding: push any residual onto the largest line
-    residual = round(invoice_tax - distributed_total, 2)
-    if abs(residual) > 0 and grossed_up:
-        # Find the largest line
-        largest_idx = max(
-            range(len(grossed_up)),
-            key=lambda i: float(grossed_up[i].get("amount", 0.0) or 0.0),
-        )
-        grossed_up[largest_idx] = dict(grossed_up[largest_idx])
-        grossed_up[largest_idx]["amount"] = round(
-            float(grossed_up[largest_idx]["amount"]) + residual, 2
-        )
-        print(f"[VAT] Rounding residual {residual} applied to line {largest_idx + 1}")
 
     return grossed_up
 
@@ -226,10 +247,13 @@ def process_vat(invoice_data: dict) -> dict:
         item["qbo_tax_code"] = TAX_CODE_MAP[raw_code]
 
     # ── Foreign tax distribution (non-UAE only) ───────────────────────────
-    if category in ("GCC", "Foreign") and invoice_tax > 0:
+    if category in ("GCC", "Foreign"):
         line_items = _distribute_foreign_tax(invoice_data, line_items)
-        invoice_data["tax_inclusive"] = True
-        print(f"[VAT] Foreign tax distributed. Bill will use TaxInclusive mode.")
+        if invoice_data.get("rcm_tax_amount", 0.0) > 0:
+            invoice_data["tax_inclusive"] = True
+            print(f"[VAT] Foreign tax distributed. Bill will use TaxInclusive mode.")
+        else:
+            invoice_data["tax_inclusive"] = False
     else:
         invoice_data["tax_inclusive"] = False
 
@@ -259,7 +283,9 @@ def process_vat(invoice_data: dict) -> dict:
     else:
         # Non-UAE: verify grossed-up total equals invoice total
         total_amount = float(invoice_data.get("total_amount", 0.0) or 0.0)
-        if total_amount > 0 and invoice_tax > 0:
+        # Use rcm_tax_amount. Only check if there was tax.
+        assigned_tax = invoice_data.get("rcm_tax_amount", 0.0)
+        if total_amount > 0 and assigned_tax > 0:
             grossed_sum = sum(float(item.get("amount", 0.0) or 0.0) for item in line_items)
             grossed_sum = round(grossed_sum, 2)
             diff = abs(grossed_sum - total_amount)

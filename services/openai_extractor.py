@@ -35,6 +35,7 @@ class InvoiceData(BaseModel):
     exclusive_amount: Optional[float] = None
     vat_amount: Optional[float] = None
     invoice_tax_amount: Optional[float] = None  # Total tax from the invoice
+    invoice_tax_percentage: Optional[float] = None  # Explicit tax percentage from the invoice
     total_amount: Optional[float] = None
     currency: str = "AED"
     line_items: List[LineItem] = []
@@ -90,6 +91,9 @@ CRITICAL INSTRUCTIONS:
 12. Extract the total tax/VAT amount shown on the invoice into invoice_tax_amount. This is the
     total tax the invoice charges (could be UAE VAT, US sales tax, UK VAT, etc.). If no tax is
     shown, set to 0.
+13. Extract the explicit tax percentage applied to the entire invoice into invoice_tax_percentage.
+    If the invoice clearly says "VAT 8%" or "Tax 15%", use that number. If it is mixed or not
+    explicitly stated, use null.
 
 IDENTIFY CORRECTLY:
 - SUPPLIER = The company SENDING the invoice
@@ -148,6 +152,7 @@ EXTRACT INTO THIS EXACT JSON STRUCTURE:
   "exclusive_amount": 0.00,
   "vat_amount": 0.00,
   "invoice_tax_amount": 0.00,
+  "invoice_tax_percentage": null,
   "total_amount": 0.00,
   "currency": "AED (default to USD if unknown)",
   "line_items": [
@@ -184,6 +189,7 @@ IMPORTANT:
 - invoice_tax_amount: Extract the total tax amount shown on the invoice (e.g., "VAT 5%: 50.00"
   means invoice_tax_amount = 50.00). This includes foreign taxes (US sales tax, UK VAT, etc.).
   If no tax line is shown, set to 0.
+- invoice_tax_percentage: Extract the exact percentage stated if present (e.g. 5, 8, 15).
 - Ensure 'total_amount' matches the sum of line items + tax.
 
 Return ONLY valid JSON. No markdown."""
