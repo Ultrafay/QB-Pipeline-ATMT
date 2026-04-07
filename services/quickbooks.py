@@ -69,10 +69,11 @@ class QuickBooksService:
         self.gl_cache = {}
         self.default_expense_account = None
         self._tax_rate_map = None   # name -> TaxCode ID, populated lazily
-        
+        self.gl_classifier = None   # injected externally after init if available
+
         # Build in-memory vendor cache from QBO
         self.vendor_cache = self._build_vendor_cache()
-        
+
         print(f"[QBO] Initialized ({environment}) — realm: {self.realm_id} — cached vendors: {len(self.vendor_cache)}")
 
     # ── Vendor Cache ─────────────────────────────────────────────────────────
@@ -532,6 +533,42 @@ class QuickBooksService:
 
         return self._all_account_names
 
+    def get_all_accounts_map(self) -> dict:
+        """
+        Return a name-keyed dict for O(1) GL account look-ups.
+
+        Returns:
+            {account_name_lower: {"value": id, "name": display_name}}
+
+        Covers Expense + Cost of Goods Sold + Other Expense account types.
+        Cached in self._accounts_map after first call.
+        """
+        if getattr(self, "_accounts_map", None) is not None:
+            return self._accounts_map
+
+        self._accounts_map: dict = {}
+        try:
+            for acct_type in ["Expense", "Cost of Goods Sold", "Other Expense"]:
+                query = (
+                    f"SELECT * FROM Account WHERE AccountType = '{acct_type}' "
+                    f"AND Active = true MAXRESULTS 200"
+                )
+                resp = self._request("GET", "query", params={"query": query})
+                if resp.status_code == 200:
+                    accounts = resp.json().get("QueryResponse", {}).get("Account", [])
+                    for acc in accounts:
+                        name = acc.get("Name", "").strip()
+                        if name:
+                            self._accounts_map[name.lower()] = {
+                                "value": str(acc["Id"]),
+                                "name":  name,
+                            }
+            print(f"[QBO] Built accounts map with {len(self._accounts_map)} entries.")
+        except Exception as exc:
+            print(f"[QBO] get_all_accounts_map error: {exc}")
+
+        return self._accounts_map
+
     def _get_account_by_name(self, account_name: str, query_condition: str = "") -> Optional[dict]:
         """
         Generic fuzzy search for any account.
@@ -921,16 +958,52 @@ class QuickBooksService:
                 line_tax_name = item.get("qbo_tax_code", "EX Exempt")
                 line_tax_ref = self._resolve_tax_code_by_name(line_tax_name)
 
-                # ── Per-line GL account ──────────────────────────
-                line_gl_name = item.get("gl_code", "") or ""
-                if line_gl_name:
-                    line_gl_ref, matched = self._resolve_gl_account(line_gl_name)
-                    if not matched:
+                # ── Per-line GL account (sheet-driven) ─────────────
+                description = str(item.get("description", "") or "")
+
+                if self.gl_classifier is not None:
+                    # Sheet is the single source of truth
+                    accounts_map = self.get_all_accounts_map()
+                    gl_name, matched_kw = self.gl_classifier.classify_line(description)
+
+                    if gl_name:
+                        # Exact key look-up first; fuzzy fallback if needed
+                        gl_key = gl_name.lower().strip()
+                        if gl_key in accounts_map:
+                            line_gl_ref = accounts_map[gl_key]
+                            print(
+                                f"[QBO] Line {i}: GL='{gl_name}' "
+                                f"(keyword='{matched_kw}') → ID={line_gl_ref['value']}"
+                            )
+                        else:
+                            # GL name exists in sheet but not in QBO CoA — use fallback
+                            gl_mismatch_notes.append(
+                                f"Line {i}: GL '{gl_name}' matched in sheet but "
+                                f"not found in QBO — used Uncategorized Expense"
+                            )
+                            line_gl_ref, _ = self._resolve_gl_account("Uncategorized Expense")
+                    else:
+                        # No sheet match — log Pending Review + use fallback
+                        self.gl_classifier.log_pending_review_line(
+                            item, invoice_data
+                        )
+                        line_gl_ref, _ = self._resolve_gl_account("Uncategorized Expense")
                         gl_mismatch_notes.append(
-                            f"Line {i}: GL '{line_gl_name}' not found in QBO, used '{line_gl_ref.get('name', 'fallback')}'"
+                            f"Line {i}: '{description[:40]}' — no GL rule matched, "
+                            f"logged to Pending Review"
                         )
                 else:
-                    line_gl_ref = fallback_gl_ref
+                    # GLClassifier not available — keep legacy behaviour
+                    line_gl_name = item.get("gl_code", "") or ""
+                    if line_gl_name:
+                        line_gl_ref, matched = self._resolve_gl_account(line_gl_name)
+                        if not matched:
+                            gl_mismatch_notes.append(
+                                f"Line {i}: GL '{line_gl_name}' not found in QBO, "
+                                f"used '{line_gl_ref.get('name', 'fallback')}'"
+                            )
+                    else:
+                        line_gl_ref = fallback_gl_ref
 
                 print(f"[QBO] Line {i}: tax='{line_tax_name}' → {line_tax_ref}, GL='{line_gl_ref.get('name', '?')}'")
 

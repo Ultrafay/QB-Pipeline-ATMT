@@ -59,6 +59,20 @@ class DriveProcessor:
             spreadsheet_id=os.getenv("GOOGLE_SHEET_ID")
         )
 
+        # GL Classifier — sheet-driven per-line classification
+        self.gl_classifier = None
+        _gl_sheet_id = os.getenv("GL_MAPPING_SHEET_ID", "")
+        if _gl_sheet_id:
+            try:
+                from services.gl_classifier import GLClassifier
+                self.gl_classifier = GLClassifier(self.sheets, _gl_sheet_id)
+                self.gl_classifier.load_mapping()
+                print("[DriveProcessor] GL Classifier initialised.")
+            except Exception as _gl_err:
+                print(f"[DriveProcessor] GL Classifier init failed: {_gl_err}")
+        else:
+            print("[DriveProcessor] GL_MAPPING_SHEET_ID not set — GL Classifier disabled.")
+
         self.folder_id = folder_id
 
         # Initialize QuickBooks (optional — only if credentials are configured)
@@ -80,6 +94,15 @@ class DriveProcessor:
                     self.extractor.set_chart_of_accounts(account_names)
             except Exception as _coa_err:
                 print(f"[DriveProcessor] Could not load chart of accounts: {_coa_err}")
+
+        # Wire GL Classifier into QBO + run startup CoA validation
+        if self.gl_classifier and self.qbo:
+            self.qbo.gl_classifier = self.gl_classifier
+            try:
+                account_names = self.qbo.get_all_account_names()
+                self.gl_classifier.validate_against_accounts(account_names)
+            except Exception as _val_err:
+                print(f"[DriveProcessor] GL CoA validation failed: {_val_err}")
 
         print(f"[DriveProcessor] Initialized. Watching folder: {folder_id}")
 

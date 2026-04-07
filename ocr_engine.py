@@ -53,7 +53,7 @@ except Exception as e:
     extractor = None
     sheets = None
 
-# GL Classifier — kept for pending review logging only
+# GL Classifier — sheet-driven per-line GL categorisation
 gl_classifier = None
 try:
     from services.gl_classifier import GLClassifier
@@ -61,7 +61,9 @@ try:
     if sheets and _gl_sheet_id:
         gl_classifier = GLClassifier(sheets, _gl_sheet_id)
         gl_classifier.load_mapping()
-        print("GL Classifier initialized (pending review logging).")
+        print("GL Classifier initialised — sheet-driven GL mapping active.")
+    else:
+        print("GL Classifier skipped: GL_MAPPING_SHEET_ID not set or Sheets not available.")
 except Exception as _gl_err:
     print(f"GL Classifier not available: {_gl_err}")
 
@@ -80,6 +82,16 @@ if _qbo_available and os.getenv("QBO_REALM_ID") and os.getenv("AUTO_PUSH_TO_QBO"
                     extractor.set_chart_of_accounts(account_names)
             except Exception as _coa_err:
                 print(f"Warning: Could not load chart of accounts: {_coa_err}")
+
+        # Wire GL Classifier into QBO and run startup CoA validation
+        if gl_classifier and qbo:
+            qbo.gl_classifier = gl_classifier
+            try:
+                account_names = qbo.get_all_account_names()
+                gl_classifier.validate_against_accounts(account_names)
+            except Exception as _val_err:
+                print(f"Warning: GL CoA validation failed: {_val_err}")
+
     except Exception as _qbo_err:
         print(f"Warning: QuickBooks init failed (continuing without QBO): {_qbo_err}")
 
