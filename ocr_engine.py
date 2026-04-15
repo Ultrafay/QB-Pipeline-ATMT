@@ -1,15 +1,5 @@
 import os
 from pathlib import Path
-import shutil
-import constants
-# Import existing modules
-import converter
-import preproces
-import run_ocr
-import extraction
-import tables
-import cv2
-import numpy as np
 import json
 from dotenv import load_dotenv
 
@@ -98,7 +88,7 @@ if _qbo_available and os.getenv("QBO_REALM_ID") and os.getenv("AUTO_PUSH_TO_QBO"
 
 def process_invoice(file_path: Path, file_id: str):
     """
-    Orchestrates the OCR process using OpenAI GPT-4o with Tesseract fallback.
+    Orchestrates invoice extraction using OpenAI GPT-4o.
     """
     print(f"Processing {file_path} with ID {file_id}")
     filename = file_path.name
@@ -153,76 +143,5 @@ def process_invoice(file_path: Path, file_id: str):
             
         except Exception as e:
             print(f"OpenAI extraction failed: {e}")
-            if os.getenv("FALLBACK_TO_TESSERACT", "true").lower() != "true":
-                raise e
-            print("Falling back to Tesseract...")
-
-    # 2. Fallback to Tesseract (Original Pipeline)
-    # The original modules (preproces, run_ocr, extraction, tables) use
-    # constants.filename to build hardcoded paths like Details/{filename}/Intermediates.
-    # We override constants.filename to file_id so they write to Details/{file_id}/...
-    
-    original_filename = constants.filename
-    constants.filename = file_id
-    
-    # Rebuild module-level path variables that were computed at import time
-    cur_path = Path.cwd()
-    details_path = cur_path / "Details" / file_id
-    intermediates_path = details_path / "Intermediates"
-    pages_dir = details_path / "Pages"
-    rows_dir = details_path / "Rows"
-    
-    # Create directories
-    details_path.mkdir(parents=True, exist_ok=True)
-    pages_dir.mkdir(exist_ok=True)
-    intermediates_path.mkdir(exist_ok=True)
-    rows_dir.mkdir(exist_ok=True)
-    
-    # Patch module-level path variables
-    preproces.path_to_read = intermediates_path
-    run_ocr.path_to_read = intermediates_path
-    extraction.path_to_read = intermediates_path
-    tables.path_to_read = intermediates_path
-    tables.path_to_write = details_path
-    
-    try:
-        # 1. Convert to JPEG
-        if filename.lower().endswith(".pdf"):
-            converter.convert_to_jpeg(file_path, pages_dir)
-        else:
-            img = cv2.imread(str(file_path))
-            cv2.imwrite(str(pages_dir / "page1.jpg"), img)
-
-        # 2. Preprocess (takes only img_path)
-        page1_path = pages_dir / "page1.jpg"
-        preproces.process(page1_path)
-        
-        # 3. Run OCR (takes no arguments)
-        run_ocr.run_tesseract()
-        
-        # 4. Extraction (takes no arguments)
-        buyer, seller, invoice = extraction.get_details()
-        
-        # 5. Tables (takes no arguments)
-        table_data = tables.get_data()
-        
-        # Format results (Legacy Format)
-        legacy_result = {
-            "file_id": file_id,
-            "buyer": buyer.tolist() if hasattr(buyer, "tolist") else buyer,
-            "seller": seller.tolist() if hasattr(seller, "tolist") else seller,
-            "invoice": invoice.tolist() if hasattr(invoice, "tolist") else invoice,
-            "table": table_data.tolist() if hasattr(table_data, "tolist") else table_data,
-            "extraction_method": "tesseract_fallback"
-        }
-        
-        return legacy_result
-    except Exception as e:
-        import traceback
-        print("!!!!!!!!!!!!!!!! OCR ENGINE CRASH !!!!!!!!!!!!!!!!")
-        traceback.print_exc()
-        raise e
-    finally:
-        # Restore original filename
-        constants.filename = original_filename
+            raise e
 
