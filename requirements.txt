@@ -1,8 +1,4 @@
 pdf2image
-pytesseract
-opencv-python-headless>=4.2.0
-numpy
-xlsxwriter
 openai
 google-api-python-client
 google-auth
