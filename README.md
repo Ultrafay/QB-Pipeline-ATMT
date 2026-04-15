@@ -1,6 +1,6 @@
 # ATH Invoice Pipeline
 
-Automated invoice processing pipeline for Athgadlang. Extracts structured data from PDF/image invoices using GPT-4o Vision, applies UAE VAT tax codes, syncs bills to QuickBooks Online, and logs everything to Google Sheets.
+Automated invoice processing pipeline. Extracts structured data from PDF/image invoices using GPT-4o Vision, applies UAE VAT tax codes, syncs bills to QuickBooks Online, and logs everything to Google Sheets.
 
 Deployed on Railway at `web-production-99a01.up.railway.app`.
 
