@@ -1,4 +1,3 @@
-##### Levle 3 in Flipkart GRID 2.0 (Electronic Incoicing using Image Processing)
 # Invoice OCR
 This repo aims to convert scanned invoices to excel sheet using cv2 and pytesseract for reading the invoices. It converts the invoice to binary form and detects horizontal and vertical lines to construct the tabular data and perform tesseract reading on each block. It also generates an output txt file where all the extracted data are placed and named fields can be obtained by searching within it.
 It supports both PDFs and Jpegs format.
