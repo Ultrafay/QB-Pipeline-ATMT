@@ -1,4 +1,4 @@
-# Cleanup for Omer Review
+# Cleanup for Review
 
 **Goal:** Strip everything not part of the live Railway production pipeline so the repo is clean for Omer's review.
 
